@@ -9,7 +9,7 @@
   "arch_file": "models/mnist_mlp.py",
   "arch_name": "MNIST_MLP",
   "arch_args": {},
-  "optim_name": "MADAM",
+  "optim_name": "VIOptimizer",
   "optim_args": {
     "curv_type": "GMM",
     "num_gmm_components": 2,
