@@ -166,7 +166,8 @@ class DiagGMMLinear(DiagCurvature):
                 self.ema_max = [[e.clone() for e in e_list]for e_list in self.ema]
             self._l2_reg_ema = self._l2_reg
         else:
-            self.ema = [[d.mul(beta).add(1 - beta, e) for d, e in zip(d_list, e_list)] for d_list, e_list in zip(data, ema)] #HERE change update rule
+            self.ema = [[d.mul(beta).add(1 - beta, e) for d, e in zip(d_list, e_list)]
+                        for d_list, e_list in zip(data, ema)]  # HERE change update rule
             self._l2_reg_ema = self._l2_reg * beta + self._l2_reg_ema * (1 - beta)
 
         if self.use_max_ema:
@@ -189,12 +190,12 @@ class DiagGMMLinear(DiagCurvature):
         data_w_elem = torch.einsum('ki,kj->ij', grad_grad,
                               in_in).div(n)  # f_out x f_in
 
-        data_w = [data_w_elem for c in range(self.num_gmm_components)]
+        data_w = data_w_elem #[data_w_elem for c in range(self.num_gmm_components)]
 
         self._data = [data_w]
 
         if self.bias:
-            data_b = [grad_grad.mean(dim=0) for _ in range(self.num_gmm_components)]  # f_out x 1
+            data_b = grad_grad.mean(dim=0) #[grad_grad.mean(dim=0) for _ in range(self.num_gmm_components)]  # f_out x 1
             self._data.append(data_b)
 
 
