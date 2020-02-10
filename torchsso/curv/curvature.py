@@ -46,6 +46,7 @@ class Curvature(object):
         self.ema_max = None
         self.inv = None
         self.std = None
+        self.delta = None  # This is total garbage
 
         self.use_sqrt_ema = use_sqrt_ema
         self.use_max_ema = use_max_ema

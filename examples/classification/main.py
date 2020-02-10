@@ -107,7 +107,7 @@ def main():
     val_transforms.append(transforms.ToTensor())
 
     if args.normalizing_data:
-        normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        normalize = transforms.Normalize((0.1307,), (0.3081,))
         train_transforms.append(normalize)
         val_transforms.append(normalize)
 
@@ -274,10 +274,10 @@ def train(model, device, train_loader, optimizer, scheduler, epoch, args, logger
             setattr(model, attr, param.detach().clone())
 
         # update params
-        def closure():
+        def closure(ent_loss):
             optimizer.zero_grad()
             output = model(data)
-            loss = F.cross_entropy(output, target)
+            loss = F.cross_entropy(output, target) #+ ent_loss
             loss.backward(create_graph=args.create_graph)
 
             return loss, output
