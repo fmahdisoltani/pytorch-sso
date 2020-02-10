@@ -155,7 +155,30 @@ class DiagGMMLinear(DiagCurvature):
     def update_std(self): #updated
         self.std = [[inv.sqrt() for inv in inv_list] for inv_list in self.inv]
 
-    def update_ema(self): #updated
+    def update_ema(self):
+        delta = self.delta
+        ll_hess = self.data
+        std = self.std  # TODO: whatever is to be updated, use a better name
+        beta = self.ema_decay  # TODO: what is ema_decay
+        ema = self.ema
+
+        if ema is None or beta == 1:
+            self.ema = [[d.clone() for _ in range(self.num_gmm_components)] for d in self.data]
+        else:
+            prior_hess = self._l2_reg
+            h_hess = ll_hess# + prior_hess
+            self.ema = [[hh.mul(beta * delta).add(e) for hh, e in zip(h_hess, e_list)]
+                        for e_list in ema]  # update rule
+            self._l2_reg = self._l2_reg * (beta * delta)
+
+    def step(self, update_std=False, update_inv=True):
+        self.update_ema()
+        if update_inv:
+            self.update_inv()
+        if update_std:
+            self.update_std()
+
+    def update_ema_old(self): #updated
         data = self.data
         ema = self.ema
         ema_max = self.ema_max

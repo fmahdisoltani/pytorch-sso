@@ -100,19 +100,26 @@ class VIOptimizer(SecondOrderOptimizer):
         for group in self.param_groups:
             group['std_scale'] = 0 if group['l2_reg'] == 0 else std_scale
             group['mean'] = [[p.data.detach().clone() for _ in range(num_gmm_components)] for p in group['params']]
-            group['pais'] = [[torch.Tensor([1/num_gmm_components]) for _ in range(num_gmm_components)] for p in group['params']]
+
+            # group['mean'] = [[torch.nn.Parameter(torch.ones_like(p, requires_grad=True)*p.data.detach().clone())
+            #                   for _ in range(num_gmm_components)] for p in group['params']]
+
+            group['pais'] = [[torch.Tensor([1/num_gmm_components])
+                              for _ in range(num_gmm_components)] for p in group['params']]
 
             self.init_buffer(group['mean'])
+            group['acc_grads'] = TensorAccumulator()  # [TensorAccumulator()] * num_gmm_components
+            group['acc_curv'] = MixtureAccumulator(num_gmm_components)
+            group['acc_delta'] = MixtureAccumulator(num_gmm_components)
 
             if init_precision is not None:
                 curv = group['curv']
                 curv.set_num_gmm(num_gmm_components)
-                curv.element_wise_init(init_precision)
+                curv.element_wise_init(init_precision)  #inits curv.data
+                curv.delta = group['acc_delta']
                 curv.step(update_std=(group['std_scale'] > 0))
 
-            group['acc_grads'] = TensorAccumulator() #[TensorAccumulator()] * num_gmm_components
-            group['acc_curv'] = MixtureAccumulator(num_gmm_components)
-            group['acc_delta'] = MixtureAccumulator(num_gmm_components)
+        a = 9
 
     def init_buffer(self, params):
         for p_list in params:
@@ -134,7 +141,8 @@ class VIOptimizer(SecondOrderOptimizer):
         super(VIOptimizer, self).zero_grad()
 
     def calculate_deltas(self, means, stds, pais, params):
-        num_gmm_components = len(means[0])
+        # calculates deltas for each parameter
+        num_gmm_components = self.defaults['num_gmm_components']
         deltas = []
         for p, mean_list, std_list, pai_list in zip(params, means, stds, pais):
 
@@ -241,7 +249,15 @@ class VIOptimizer(SecondOrderOptimizer):
             self.sample_params()
 
             # forward and backward
-            loss, output = closure()
+            # ent_loss = 0
+            # for group in self.param_groups:
+            #     mean = group['mean']
+            #     params = group['params']
+            #     group['q_entropy'] = [log_gmm(p.data, m_list, s_list, pai_list) for p, m_list, s_list, pai_list
+            #                           in zip(params, group['mean'], group['curv'].std, group['pais'])]  # pais or log_pais
+            #
+            #     ent_loss += torch.sum(torch.stack([torch.sum(g) for g in group['q_entropy']]))
+            loss, output = closure(0)
 
             acc_loss.update(loss, scale=1/m)
             if output.ndim == 2:
@@ -496,8 +512,22 @@ class DistributedVIOptimizer(DistributedSecondOrderOptimizer, VIOptimizer):
         return ret
 
 
+import numpy as np
 def gaussian(x, mean, std):
     return (1 / torch.sqrt(torch.FloatTensor([2*math.pi])*std**2)) * torch.exp(-((x - mean) ** 2.) / (2 * std**2))
 
 def gmm(x, means, variances, pais):
     return sum([pai * gaussian(x, mu, var) for (pai, mu, var) in zip(pais, means, variances)])
+
+def log_gaussian(x, mean, std):
+    return -0.5 * torch.log(2 * np.pi * std ** 2) - (0.5 * (1 / (std ** 2)) * (x - mean) ** 2)
+
+def log_gmm(x, means, stds, log_pais):
+    component_log_densities = torch.stack([log_gaussian(x, mu, std) for (mu, std) in zip(means, stds)]).T
+    # log_weights = torch.log(pais)
+    log_weights = log_normalize(torch.stack(log_pais))
+    return torch.logsumexp(component_log_densities , axis=-1, keepdims=False).T  #TODO: fix this,it's wrong now
+
+def log_normalize(x):
+    val = torch.logsumexp(x, 0)
+    return x - val

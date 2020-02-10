@@ -274,10 +274,10 @@ def train(model, device, train_loader, optimizer, scheduler, epoch, args, logger
             setattr(model, attr, param.detach().clone())
 
         # update params
-        def closure():
+        def closure(ent_loss):
             optimizer.zero_grad()
             output = model(data)
-            loss = F.cross_entropy(output, target)
+            loss = F.cross_entropy(output, target) #+ ent_loss
             loss.backward(create_graph=args.create_graph)
 
             return loss, output
