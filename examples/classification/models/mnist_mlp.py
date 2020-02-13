@@ -11,12 +11,12 @@ class MNIST_MLP(nn.Module):
         super().__init__()
         n_hid = 2
         n_out = 10
-        self.l1 = nn.Linear(28*28, n_hid)
+        self.l1 = nn.Linear(3, n_hid)
         self.l2 = nn.Linear(n_hid, n_hid)
         self.l3 = nn.Linear(n_hid, n_out)
 
     def forward(self, x: torch.Tensor):
-        x1 = x.view([-1, 28*28])
+        x1 = x.view([-1, 28*28])[:, 0:3]
         x2 = F.relu(self.l1(x1))
         x3 = F.relu(self.l2(x2))
         x4 = self.l3(x3)

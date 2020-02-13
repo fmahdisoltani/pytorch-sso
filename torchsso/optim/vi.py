@@ -100,19 +100,20 @@ class VIOptimizer(SecondOrderOptimizer):
         for group in self.param_groups:
             group['std_scale'] = 0 if group['l2_reg'] == 0 else std_scale
             group['mean'] = [[p.data.detach().clone() for _ in range(num_gmm_components)] for p in group['params']]
-            group['pais'] = [[torch.Tensor([1/num_gmm_components]) for _ in range(num_gmm_components)] for p in group['params']]
+            group['pais'] = [[torch.ones_like(p)/num_gmm_components for _ in range(num_gmm_components)]
+                             for p in group['params']]
 
             self.init_buffer(group['mean'])
+            group['acc_delta'] = MixtureAccumulator(num_gmm_components)
+            group['acc_grads'] = TensorAccumulator()  # [TensorAccumulator()] * num_gmm_components
+            group['acc_curv'] = TensorAccumulator()
 
             if init_precision is not None:
                 curv = group['curv']
                 curv.set_num_gmm(num_gmm_components)
                 curv.element_wise_init(init_precision)
+                curv.delta = group['acc_delta']
                 curv.step(update_std=(group['std_scale'] > 0))
-
-            group['acc_grads'] = TensorAccumulator() #[TensorAccumulator()] * num_gmm_components
-            group['acc_curv'] = MixtureAccumulator(num_gmm_components)
-            group['acc_delta'] = MixtureAccumulator(num_gmm_components)
 
     def init_buffer(self, params):
         for p_list in params:
@@ -123,7 +124,7 @@ class VIOptimizer(SecondOrderOptimizer):
                 state['grad_ema_buffer'] = torch.zeros_like(p.data)
 
     def zero_grad(self):
-        r"""Clears the gradients of all optimized :class:`torch.Tensor` s."""
+        r"""Clears the gradients of all optimized :class:`torch.Tenfsor` s."""
         for group in self.param_groups:
             for m_list in group['mean']:
                 for m in m_list:
@@ -137,14 +138,13 @@ class VIOptimizer(SecondOrderOptimizer):
         num_gmm_components = len(means[0])
         deltas = []
         for p, mean_list, std_list, pai_list in zip(params, means, stds, pais):
-
-            down = gmm(p, mean_list, std_list, pai_list)
-            deltas.append( [gaussian(p, mean_list[i], std_list[i])/down for i in range(num_gmm_components)])
+            p_value = p.data.detach()
+            down = gmm(p_value, mean_list, std_list, pai_list)
+            deltas.append([gaussian(p_value, mean_list[i], std_list[i])/down for i in range(num_gmm_components)])
 
         # TODO: check if it is the correct thing to pass std
-
-
         return deltas
+
     @property
     def seed(self):
         return self.optim_state['step'] + self.defaults['seed_base']
@@ -239,6 +239,14 @@ class VIOptimizer(SecondOrderOptimizer):
 
             # sampling
             self.sample_params()
+            # forward and backward
+            # ent_loss = 0
+            # for group in self.param_groups:
+            #     mean = group['mean']
+            #     params = group['params']
+            #     group['q_entropy'] = [log_gmm(p.data, m_list, s_list, pai_list) for p, m_list, s_list, pai_list
+            #                           in zip(params, group['mean'], group['curv'].std, group['pais'])]  # pais or log_pais
+            #     ent_loss += torch.sum(torch.stack([torch.sum(g) for g in group['q_entropy']]))
 
             # forward and backward
             loss, output = closure()
@@ -290,9 +298,12 @@ class VIOptimizer(SecondOrderOptimizer):
                 curv.precondition_grad(mean)
 
             # update mean
-            self.update_preprocess(group, target='mean', grad_type='preconditioned')
-            self.update(group, target='mean')
-            self.update_postprocess(group, target='mean')
+            # self.update_preprocess(group, target='mean', grad_type='preconditioned')
+            self.update_mean(group)
+            # self.update_postprocess(group, target='mean')
+
+            # TODO: update pais
+            self.update_pais(group)
 
             # copy mean to param
             params = group['params']
@@ -304,15 +315,54 @@ class VIOptimizer(SecondOrderOptimizer):
 
         return loss, prob
 
-    def update(self, group, target='params'):
-        params = group[target]
+    def update_mean(self, group):
+
+        means = group['mean']
+        params = group['params']
         deltas = group['acc_delta']._accumulation
-        for p_list, d_list in zip(params, deltas):
-            for p, d in (p_list, d_list):
-                grad = p.grad
+        invs = group['curv'].inv
+        for m_list, d_list, inv_list in zip(means, deltas, invs):
+            for m, d, inv in zip(m_list, d_list, inv_list):
+                grad = m.grad
                 if grad is None:
                     continue
-                p.data.add_(-group['lr'], d * grad) #HERE: * group['ratio']
+                m.data.add_(-group['lr'], d * grad*inv)  #HERE: * group['ratio']
+
+    def update_pais(self, group):
+        num_components = self.defaults['num_gmm_components']
+        params = group['params']
+        deltas = group['acc_delta']._accumulation
+        pais = group['pais']
+        rhos = [[torch.log(p) for p in p_list] for p_list in pais]
+
+        delta_K = [d_list[-1] for d_list in deltas] #last component for all param
+
+        delta_diff = []
+        # for d_list in deltas:
+        #     for d, dk in zip(d_list, delta_K):
+        #         delta_diff.append(torch.stack([di - dki for di, dki in zip(d, dk)]))
+        # rho[c] = (1) * rho[c] - beta * (all_deltas[c] - all_deltas[-1]) * objective(sampled_z)
+
+        for d_list, dk in zip(deltas, delta_K):
+            for d in d_list:
+                print(d - dk)
+                print("O" * 10)
+                delta_diff.append(d - dk)
+
+        for d_list in deltas:
+            for d in d_list:
+                grad = m.grad
+                if grad is None:
+                    continue
+                m.data.add_(-group['lr'], d * grad * inv)  # HERE: * group['ratio']
+
+    def update(self, group, target='params'):
+        params = group[target]
+        for p in params:
+            grad = p.grad
+            if grad is None:
+                continue
+            p.data.add_(-group['lr'], grad)
 
     def update_preprocess(self, group, target='params', grad_type='raw'):
         assert grad_type in ['raw', 'preconditioned'], 'Invalid grad type: {}.'.format(grad_type)
@@ -333,7 +383,7 @@ class VIOptimizer(SecondOrderOptimizer):
                 grad.add_(group['l2_reg'], p.data)  # group['l2_reg'] is the regularization rate
                 curv = group['curv']
                 if curv is not None:
-                    curv.l2_reg = group['l2_reg']  #TODO: check
+                    curv.l2_reg = group['l2_reg']  # TODO: wtf seriously
 
         def apply_weight_decay(p, grad):
             if group['weight_decay'] != 0:

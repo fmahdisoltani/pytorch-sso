@@ -44,6 +44,8 @@ class DiagCovLinear(DiagCurvature):
             data_b = grad_grad.mean(dim=0)  # f_out x 1
             self._data.append(data_b)
 
+        a = 1/0
+
 
 class KronCovLinear(KronCurvature):
 
@@ -121,13 +123,13 @@ class DiagGMMLinear(DiagCurvature):
         if self._data is None:
             return self._get_shape()
 
-        return tuple([[[d.shape for d in d_list] for d_list in self._data]])
+        return tuple([d.shape for d in self._data])
 
     def _get_shape(self):  # make it gmm yourself
-        return tuple([p.shape for _ in range(self.num_gmm_components)]for p in self.module.parameters())
+        return tuple(p.shape for p in self.module.parameters())
 
     def element_wise_init(self, value):  # updated
-        self._data = [[torch.ones(s, device=self.device).mul(value) for s in shape_list] for shape_list in self.shape]
+        self._data = [torch.ones(s, device=self.device).mul(value) for s in self.shape]
 
     def set_num_gmm(self, num_gmm_components):
         self.num_gmm_components = num_gmm_components
@@ -160,15 +162,31 @@ class DiagGMMLinear(DiagCurvature):
         ema = self.ema
         ema_max = self.ema_max
         beta = self.ema_decay
+        delta = self.delta
+
         if ema is None or beta == 1:
-            self.ema = [[d.clone() for d in d_list] for d_list in data]
-            if self.use_max_ema and ema_max is None:
-                self.ema_max = [[e.clone() for e in e_list]for e_list in self.ema]
-            self._l2_reg_ema = self._l2_reg
+            self.ema = [[d.clone() for _ in range(self.num_gmm_components)] for d in self.data]
         else:
-            self.ema = [[d.mul(beta).add(1 - beta, e) for d, e in zip(d_list, e_list)]
-                        for d_list, e_list in zip(data, ema)]  # HERE change update rule
-            self._l2_reg_ema = self._l2_reg * beta + self._l2_reg_ema * (1 - beta)
+            prior_hess = self._l2_reg
+            h_hess = self.data  # + prior_hess
+
+            # for e_list,hh in zip(ema, h_hess):
+            #     for e in e_list:
+            #         (hh * beta).add(e)
+
+            self.ema = [[(hh*beta*d).add(e) for e, d in zip(e_list, d_list)]
+                        for e_list, hh, d_list in zip(ema, h_hess, delta._accumulation)]  # update rule
+            # self._l2_reg = self._l2_reg * beta * delta #TODO:Farzaneh: Fix
+
+        # if ema is None or beta == 1:
+        #     self.ema = [[d.clone() for d in d_list] for d_list in data]
+        #     if self.use_max_ema and ema_max is None:
+        #         self.ema_max = [[e.clone() for e in e_list]for e_list in self.ema]
+        #     self._l2_reg_ema = self._l2_reg
+        # else:
+        #     self.ema = [[d.mul(beta).add(1 - beta, e) for d, e in zip(d_list, e_list)]
+        #                 for d_list, e_list in zip(data, ema)]  # HERE change update rule
+        #     self._l2_reg_ema = self._l2_reg * beta + self._l2_reg_ema * (1 - beta)
 
         if self.use_max_ema:
             for e_list, e_max_list in zip(self.ema, self.ema_max):
@@ -179,23 +197,30 @@ class DiagGMMLinear(DiagCurvature):
         self._data = [[d.mul(scale) for d in d_list] for d_list in self._data]
 
     def update_in_backward(self, grad_output):  # for GMM
-        data_input = getattr(self._module, 'data_input', None)  # n x f_in
-        assert data_input is not None
+        # data_input = getattr(self._module, 'data_input', None)  # n x f_in
+        # assert data_input is not None
+        #
+        # n = data_input.shape[0]
+        #
+        # in_in = data_input.mul(data_input)  # n x f_in
+        # grad_grad = grad_output.mul(grad_output)  # n x f_out
+        #
+        # data_w_elem = torch.einsum('ki,kj->ij', grad_grad,
+        #                       in_in).div(n)  # f_out x f_in
+        #
+        # data_w = data_w_elem #[data_w_elem for c in range(self.num_gmm_components)]
+        #
+        # self._data = [data_w]
+        #
+        #
+        # if self.bias:
+        #     data_b = grad_grad.mean(dim=0) #[grad_grad.mean(dim=0) for _ in range(self.num_gmm_components)]  # f_out x 1
+        #     self._data.append(data_b)
 
-        n = data_input.shape[0]
-
-        in_in = data_input.mul(data_input)  # n x f_in
-        grad_grad = grad_output.mul(grad_output)  # n x f_out
-
-        data_w_elem = torch.einsum('ki,kj->ij', grad_grad,
-                              in_in).div(n)  # f_out x f_in
-
-        data_w = data_w_elem #[data_w_elem for c in range(self.num_gmm_components)]
-
-        self._data = [data_w]
-
-        if self.bias:
-            data_b = grad_grad.mean(dim=0) #[grad_grad.mean(dim=0) for _ in range(self.num_gmm_components)]  # f_out x 1
-            self._data.append(data_b)
+        print("O" * 20)
+        print(self.data)
+        print(self.data[0].shape)
+        print("L" * 20)
+        # a = 1 / 0
 
 
