@@ -44,8 +44,6 @@ class DiagCovLinear(DiagCurvature):
             data_b = grad_grad.mean(dim=0)  # f_out x 1
             self._data.append(data_b)
 
-        a = 1/0
-
 
 class KronCovLinear(KronCurvature):
 
